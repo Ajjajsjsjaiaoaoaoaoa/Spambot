@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: telegram-bot
+    env: python
+    plan: free
+    buildCommand: ""
+    startCommand: "python bot.py"
+    envVars:
+      - key: API_ID
+        value: TU_API_ID
+      - key: API_HASH
+        value: TU_API_HASH
