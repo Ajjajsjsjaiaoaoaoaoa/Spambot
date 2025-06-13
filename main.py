@@ -24,7 +24,7 @@ def cargar_grupos():
 async def estado(event):
     grupos = cargar_grupos()
     uptime = str(datetime.datetime.now() - inicio).split('.')[0]
-    await event.reply(f"🤖 Bot activo.
+    await event.reply(f"🤖 Bot activo.")
 ⏱ Uptime: {uptime}
 📦 {len(grupos)} grupos en grupos.txt")
 
