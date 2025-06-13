@@ -5,8 +5,8 @@ from flask import Flask
 from threading import Thread
 
 # 📦 CONFIGURACIÓN
-api_id = 12345678  # Tu API ID
-api_hash = 'tu_api_hash_aquí'  # Tu API HASH
+api_id = 23720875  # Tu API ID
+api_hash = 'a52aa051d3e737afb9e21fe6b80cc765'  # Tu API HASH
 session_name = 'mi_sesion'
 ARCHIVO_GRUPOS = 'grupos.txt'
 grupo_logs = '@logsdelbotspammm'  # username o ID del grupo log
