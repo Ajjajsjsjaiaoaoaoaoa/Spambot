@@ -5,10 +5,10 @@ from flask import Flask
 from threading import Thread
 
 # CONFIG
-api_id = 12345678  # Tu API ID
-api_hash = 'tu_api_hash'  # Tu API HASH
+api_id = 23720875  # Tu API ID
+api_hash = 'a52aa051d3e737afb9e21fe6b80cc765'  # Tu API HASH
 session_name = 'mi_sesion'
-grupo_logs = 'logsdelbotspammm'
+grupo_logs = '@logsdelbotspammm'
 ARCHIVO_GRUPOS = 'grupos.txt'
 inicio = datetime.datetime.now()
 
