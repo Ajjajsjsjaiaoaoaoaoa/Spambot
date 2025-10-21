@@ -10,7 +10,7 @@ import sqlite3
 from io import BytesIO
 from flask import Flask
 from telethon import TelegramClient
-from telethon.sessions import StringSession  # Agregado para sesiones
+from telethon.sessions import StringSession
 from telethon.errors.rpcerrorlist import FloodWaitError, UserBannedInChannelError
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
@@ -38,7 +38,7 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS sessions (
                     user_id INTEGER PRIMARY KEY,
                     session_data TEXT
-                )''')  # Para guardar sesiones en DB
+                )''')
     conn.commit()
     conn.close()
 
@@ -252,7 +252,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         client = TelegramClient(f"{user_id}_session", api_id, api_hash)
         users[user_id]['client'] = client
         try:
-            await client.send_code_request(phone)  # Envía código sin input
+            await client.start()  # Conectar primero
+            await client.send_code_request(phone)  # Luego enviar código
             await update.message.reply_text("Código enviado. Envía el código de verificación:")
             context.user_data["register_step"] = "code"
             context.user_data["phone"] = phone
@@ -266,9 +267,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         phone = context.user_data.get("phone")
         client = users[user_id]['client']
         try:
-            await client.sign_in(phone, code)  # Sign in sin input
+            await client.sign_in(phone, code)
             cargar_datos_usuario(user_id)
-            # Guardar sesión en DB
             session_data = client.session.save()
             guardar_session(user_id, session_data)
             await update.message.reply_text("✅ Registrado. Usa /start.")
@@ -367,7 +367,6 @@ async def main():
         user_id = row[0]
         users[user_id] = {'client': None, 'mensajes_guardados': {}, 'excluded_groups': [], 'spam_tasks': {}, 'flood_count': 0, 'semaphore': asyncio.Semaphore(5)}
         cargar_datos_usuario(user_id)
-    # Cargar sesiones de DB
     c.execute("SELECT user_id, session_data FROM sessions")
     for row in c.fetchall():
         user_id, session_data = row
