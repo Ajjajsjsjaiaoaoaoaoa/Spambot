@@ -10,6 +10,7 @@ import sqlite3
 from io import BytesIO
 from flask import Flask
 from telethon import TelegramClient
+from telethon.sessions import StringSession  # Agregado para sesiones
 from telethon.errors.rpcerrorlist import FloodWaitError, UserBannedInChannelError
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
@@ -18,13 +19,13 @@ from telegram.ext import (
 )
 
 # --- CONFIGURACIÓN GLOBAL ---
-api_id = 28793490
-api_hash = '840195a144a604ea7d6ebc872305f5c0'
-bot_token = '8168761242:AAHTaHR_9UWsVYGBDzNruZ_ZgAd33gYr2-o'  # Nuevo token
+api_id = 23720875
+api_hash = 'a52aa051d3e737afb9e21fe6b80cc765'
+bot_token = '8168761242:AAHTaHR_9UWsVYGBDzNruZ_ZgAd33gYr2-o'
 chat_id_aviso = 7296719664
 ADMIN_ID = 7296719664
 
-users = {}  # user_id -> {client, mensajes_guardados, excluded_groups, spam_tasks, flood_count}
+users = {}  # user_id -> {client, mensajes_guardados, excluded_groups, spam_tasks, flood_count, semaphore}
 
 # --- FUNCIONES DE SQLITE ---
 def init_db():
@@ -34,6 +35,10 @@ def init_db():
                     user_id INTEGER PRIMARY KEY,
                     excluded_groups TEXT
                 )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS sessions (
+                    user_id INTEGER PRIMARY KEY,
+                    session_data TEXT
+                )''')  # Para guardar sesiones en DB
     conn.commit()
     conn.close()
 
@@ -55,6 +60,21 @@ def guardar_datos_usuario(user_id):
     c.execute("INSERT OR REPLACE INTO blacklists (user_id, excluded_groups) VALUES (?, ?)", (user_id, excluded_groups_json))
     conn.commit()
     conn.close()
+
+def guardar_session(user_id, session_data):
+    conn = sqlite3.connect('bot.db')
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO sessions (user_id, session_data) VALUES (?, ?)", (user_id, session_data))
+    conn.commit()
+    conn.close()
+
+def cargar_session(user_id):
+    conn = sqlite3.connect('bot.db')
+    c = conn.cursor()
+    c.execute("SELECT session_data FROM sessions WHERE user_id = ?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else None
 
 app = Flask(__name__)
 
@@ -108,7 +128,7 @@ async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Ya registrado.")
         return
     if user_id not in users:
-        users[user_id] = {'client': None, 'mensajes_guardados': {}, 'excluded_groups': [], 'spam_tasks': {}, 'flood_count': 0}
+        users[user_id] = {'client': None, 'mensajes_guardados': {}, 'excluded_groups': [], 'spam_tasks': {}, 'flood_count': 0, 'semaphore': asyncio.Semaphore(5)}
     await update.message.reply_text("Envíame teléfono (ej: +1234567890):")
     context.user_data["register_step"] = "phone"
 
@@ -157,6 +177,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mensajes_guardados = users[user_id]['mensajes_guardados']
     excluded_groups = users[user_id]['excluded_groups']
     spam_tasks = users[user_id]['spam_tasks']
+    semaphore = users[user_id]['semaphore']
 
     if data.startswith("spam_"):
         msg_id = data.split("_")[1]
@@ -166,20 +187,29 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         await query.edit_message_text("⏳ Enviando...")
         ok, fail = 0, 0
+        start_time = time.time()
+        async def send_to_group(dialog):
+            nonlocal ok, fail
+            async with semaphore:
+                if dialog.is_group and dialog.id not in excluded_groups:
+                    try:
+                        await client.forward_messages(dialog.id, msg.id, "me")
+                        ok += 1
+                    except FloodWaitError as e:
+                        users[user_id]['flood_count'] += 1
+                        if users[user_id]['flood_count'] > 3:
+                            await client.bot.send_message(chat_id=chat_id_aviso, text=f"🚨 Riesgo ban {user_id}.")
+                        await asyncio.sleep(e.seconds + 1)
+                        fail += 1
+                    except:
+                        fail += 1
+                    await asyncio.sleep(random.uniform(0.5, 1))
+        tasks = []
         async for dialog in client.iter_dialogs():
-            if dialog.is_group and dialog.id not in excluded_groups:
-                try:
-                    await client.forward_messages(dialog.id, msg.id, "me")
-                    ok += 1
-                    await asyncio.sleep(random.uniform(1, 3))
-                except FloodWaitError as e:
-                    users[user_id]['flood_count'] += 1
-                    if users[user_id]['flood_count'] > 3:
-                        await client.bot.send_message(chat_id=chat_id_aviso, text=f"🚨 Riesgo ban {user_id}.")
-                    await asyncio.sleep(e.seconds + 1)
-                    fail += 1
-                except:
-                    fail += 1
+            if time.time() - start_time > 30:
+                break
+            tasks.append(send_to_group(dialog))
+        await asyncio.gather(*tasks, return_exceptions=True)
         await query.edit_message_text(f"<b>✅ {ok} | ❌ {fail}</b>", parse_mode="HTML")
 
     elif data.startswith("programar_"):
@@ -222,24 +252,29 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         client = TelegramClient(f"{user_id}_session", api_id, api_hash)
         users[user_id]['client'] = client
         try:
-            await client.start(phone=phone)
-            await update.message.reply_text("Envíame código:")
+            await client.send_code_request(phone)  # Envía código sin input
+            await update.message.reply_text("Código enviado. Envía el código de verificación:")
             context.user_data["register_step"] = "code"
+            context.user_data["phone"] = phone
         except Exception as e:
-            await update.message.reply_text(f"Error: {e}")
+            await update.message.reply_text(f"Error enviando código: {e}")
             users[user_id]['client'] = None
             context.user_data.clear()
 
     elif register_step == "code":
         code = update.message.text.strip()
+        phone = context.user_data.get("phone")
         client = users[user_id]['client']
         try:
-            await client.sign_in(code=code)
+            await client.sign_in(phone, code)  # Sign in sin input
             cargar_datos_usuario(user_id)
+            # Guardar sesión en DB
+            session_data = client.session.save()
+            guardar_session(user_id, session_data)
             await update.message.reply_text("✅ Registrado. Usa /start.")
             context.user_data.clear()
         except Exception as e:
-            await update.message.reply_text(f"Error: {e}")
+            await update.message.reply_text(f"Error en código: {e}")
             users[user_id]['client'] = None
             context.user_data.clear()
 
@@ -248,6 +283,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mensajes_guardados = users[user_id]['mensajes_guardados']
         excluded_groups = users[user_id]['excluded_groups']
         spam_tasks = users[user_id]['spam_tasks']
+        semaphore = users[user_id]['semaphore']
 
         if action == "set_interval":
             try:
@@ -257,23 +293,35 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             msg_id = context.user_data.get("msg_id")
             msg = mensajes_guardados.get(msg_id)
+            if len(spam_tasks) >= 10:
+                await update.message.reply_text("❌ Demasiados spams activos.")
+                return
             async def spam_loop():
                 while True:
                     ok, fail = 0, 0
+                    start_time = time.time()
+                    async def send_to_group(dialog):
+                        nonlocal ok, fail
+                        async with semaphore:
+                            if dialog.is_group and dialog.id not in excluded_groups:
+                                try:
+                                    await client.forward_messages(dialog.id, msg.id, "me")
+                                    ok += 1
+                                except FloodWaitError as e:
+                                    users[user_id]['flood_count'] += 1
+                                    if users[user_id]['flood_count'] > 3:
+                                        await client.bot.send_message(chat_id=chat_id_aviso, text=f"🚨 Riesgo ban {user_id}.")
+                                    await asyncio.sleep(e.seconds + 1)
+                                    fail += 1
+                                except:
+                                    fail += 1
+                                await asyncio.sleep(random.uniform(0.5, 1))
+                    tasks = []
                     async for dialog in client.iter_dialogs():
-                        if dialog.is_group and dialog.id not in excluded_groups:
-                            try:
-                                await client.forward_messages(dialog.id, msg.id, "me")
-                                ok += 1
-                                await asyncio.sleep(random.uniform(1, 3))
-                            except FloodWaitError as e:
-                                users[user_id]['flood_count'] += 1
-                                if users[user_id]['flood_count'] > 3:
-                                    await client.bot.send_message(chat_id=chat_id_aviso, text=f"🚨 Riesgo ban {user_id}.")
-                                await asyncio.sleep(e.seconds + 1)
-                                fail += 1
-                            except:
-                                fail += 1
+                        if time.time() - start_time > 30:
+                            break
+                        tasks.append(send_to_group(dialog))
+                    await asyncio.gather(*tasks, return_exceptions=True)
                     await update.message.reply_text(f"<b>🔁 {ok} | {fail}</b>", parse_mode="HTML")
                     await asyncio.sleep(intervalo)
             task = asyncio.create_task(spam_loop())
@@ -312,27 +360,23 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def main():
     init_db()
-    # Cargar usuarios de DB
     conn = sqlite3.connect('bot.db')
     c = conn.cursor()
     c.execute("SELECT user_id FROM blacklists")
     for row in c.fetchall():
         user_id = row[0]
-        users[user_id] = {'client': None, 'mensajes_guardados': {}, 'excluded_groups': [], 'spam_tasks': {}, 'flood_count': 0}
+        users[user_id] = {'client': None, 'mensajes_guardados': {}, 'excluded_groups': [], 'spam_tasks': {}, 'flood_count': 0, 'semaphore': asyncio.Semaphore(5)}
         cargar_datos_usuario(user_id)
+    # Cargar sesiones de DB
+    c.execute("SELECT user_id, session_data FROM sessions")
+    for row in c.fetchall():
+        user_id, session_data = row
+        if user_id not in users:
+            users[user_id] = {'client': None, 'mensajes_guardados': {}, 'excluded_groups': [], 'spam_tasks': {}, 'flood_count': 0, 'semaphore': asyncio.Semaphore(5)}
+        client = TelegramClient(StringSession(session_data), api_id, api_hash)
+        users[user_id]['client'] = client
+        await client.start()
     conn.close()
-
-    # Cargar sesiones de Telethon si existen
-    for filename in os.listdir('.'):
-        if filename.endswith('.session'):
-            try:
-                user_id = int(filename.split('_')[0])
-                if user_id in users:
-                    client = TelegramClient(f"{user_id}_session", api_id, api_hash)
-                    users[user_id]['client'] = client
-                    await client.start()  # Carga sesión automáticamente
-            except:
-                continue
 
     app_flask = threading.Thread(target=lambda: app.run(host='0.0.0.0', port=8080))
     app_flask.start()
@@ -342,6 +386,9 @@ async def main():
             await asyncio.sleep(60)
             for user_id in users:
                 guardar_datos_usuario(user_id)
+                if users[user_id]['client']:
+                    session_data = users[user_id]['client'].session.save()
+                    guardar_session(user_id, session_data)
 
     asyncio.create_task(auto_save())
 
@@ -371,6 +418,9 @@ async def main():
     finally:
         for user_id in users:
             guardar_datos_usuario(user_id)
+            if users[user_id]['client']:
+                session_data = users[user_id]['client'].session.save()
+                guardar_session(user_id, session_data)
         if chat_id_aviso:
             try:
                 await app.bot.send_message(chat_id=chat_id_aviso, text="<b>Bot inactivo ❌</b>", parse_mode="HTML")
