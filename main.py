@@ -77,7 +77,9 @@ async def pedidos(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def manejar_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.photo:
         foto = update.message.photo[-1]
-        await context.bot.send_photo(chat_id=CANAL_ID, photo=foto.file_id, caption=f"Foto de {update.effective_user.first_name}")
+        # Usa el caption original del mensaje (puede ser None si no hay)
+        caption = update.message.caption
+        await context.bot.send_photo(chat_id=CANAL_ID, photo=foto.file_id, caption=caption)
         await update.message.reply_text('Foto reenviada al canal.')
     else:
         await update.message.reply_text('Envía una foto.')
@@ -96,4 +98,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-      
