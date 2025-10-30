@@ -1,6 +1,5 @@
 import logging
 from datetime import datetime
-import pytz  # Agregado para zonas horarias
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
 
@@ -10,7 +9,7 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 # Reemplaza con tu token
 TOKEN = '8344368928:AAHWVGBOPAu7Q4N5gqphy6FBCl0pmV1wmvU'
 
-# Username del canal (ej. '@jss')
+# Username del canal (ej. '@MiCanalVentas')
 CANAL_ID = '@pzreferencias'
 
 # Lista para almacenar ventas (en memoria)
@@ -41,9 +40,7 @@ async def venta(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         cantidad = int(args[1])
     
-    # Timestamp con zona horaria de Guadalajara (México Central)
-    tz = pytz.timezone('America/Mexico_City')
-    timestamp = datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S')
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
     # Guarda la venta
     ventas.append({
